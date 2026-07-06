@@ -104,11 +104,29 @@ converge and anything with an intact dependency simply never fails.
 
 ## Composes with the NIS2 vendor-risk framework
 
-Node `nis2_vendor_score` values are meant to be imported from
-[nis2-vendor-risk-framework](https://github.com/LeightonSec). That project scores
-a single supplier; cascade-map answers which of those suppliers is *also* a
-structural single point of failure that drags an essential entity below its
+[nis2-vendor-risk-framework](https://github.com/LeightonSec/nis2-vendor-risk-framework)
+scores a single supplier; cascade-map answers which of those suppliers is *also*
+a structural single point of failure that drags an essential entity below its
 required ride-through — the board-level question.
+
+The composition is a real import path, not a naming convention. `import-nis2`
+parses the framework's filled assessment report (its actual deliverable),
+converts the overall compliance percentage onto the graph's 0–10 risk scale
+(`risk = (100 − pct) / 10`, recorded in a provenance header along with the
+source report, vendor, rating, and any value it replaced), and merges it onto
+the named node:
+
+```sh
+cascade-map import-nis2 examples/region_x.yaml \
+  --report examples/nis2_assessment_grid_substation_12.md \
+  --node grid_substation_12 -o merged.yaml
+cascade-map analyze merged.yaml --inject grid_substation_12
+```
+
+The import **fails closed**: an unfilled template, a missing or ambiguous risk
+rating, a rating inconsistent with the framework's own score bands, an
+out-of-range score, or an unknown node id are all hard errors. A compliance
+artifact either parses cleanly or is rejected — never silently guessed at.
 
 ## Development
 

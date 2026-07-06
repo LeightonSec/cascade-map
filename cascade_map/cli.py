@@ -4,6 +4,7 @@ import sys
 from cascade_map import __version__
 from cascade_map.analysis import render_report
 from cascade_map.engine import load_graph, propagate, render_timeline
+from cascade_map.nis2_import import merge_nis2
 from cascade_map.render import render_dot
 
 
@@ -40,7 +41,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     d.add_argument("-o", "--output", metavar="FILE", help="write DOT to FILE")
 
+    n = sub.add_parser(
+        "import-nis2",
+        help="import NIS2 assessment-report scores onto graph nodes (fail-closed)",
+    )
+    n.add_argument("graph", help="path to a YAML dependency graph")
+    n.add_argument(
+        "--report", action="append", required=True, metavar="REPORT_MD",
+        help="filled nis2-vendor-risk-framework assessment report (pairs with --node, in order)",
+    )
+    n.add_argument(
+        "--node", action="append", required=True, metavar="NODE_ID",
+        help="graph node the paired --report scores (repeatable)",
+    )
+    n.add_argument("-o", "--output", metavar="FILE", help="write merged YAML to FILE")
+
     args = ap.parse_args(argv)
+
+    if args.cmd == "import-nis2":
+        if len(args.report) != len(args.node):
+            ap.error("--report and --node must be given in matching pairs")
+        merged = merge_nis2(args.graph, list(zip(args.report, args.node)))
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                fh.write(merged)
+        else:
+            sys.stdout.write(merged)
+        return 0
+
     g = load_graph(args.graph)
 
     if args.cmd == "timeline":

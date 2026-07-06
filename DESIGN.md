@@ -175,6 +175,17 @@ board-slide line.
   pinned to the fleet SHA), hashed universal lockfiles at the 3.10 floor, gate
   green (one HIGH `missing_validation` resolved with real input validation, not
   a waiver), 25 tests. Published to `LeightonSec/cascade-map`.
+- **NIS2 import pipeline — SHIPPED 2026-07-06.** `cascade-map import-nis2`
+  (`cascade_map/nis2_import.py`) turns the composition claim from a manual
+  convention into a demonstrable pipeline: it parses the vendor-risk
+  framework's filled assessment report (its real deliverable), converts the
+  overall compliance percentage onto the 0–10 risk scale
+  (`risk = (100 − pct) / 10`, recorded in a provenance header), and merges it
+  onto a named node. Fail-closed: unfilled template, ambiguous/missing rating,
+  rating inconsistent with the framework's own score bands, out-of-range score,
+  and unknown node are all hard errors. 15 tests incl. a round-trip through
+  `load_graph` and the analysis layer; illustrative filled report in
+  `examples/`.
 - **Gate 5 (optional, if anyone asks) — restoration modelling.** Reverse
   propagation, restore-time bottlenecks (the 12-month HV transformer).
 
