@@ -31,18 +31,21 @@ def test_dot_is_wellformed_and_lists_nodes():
         assert f'"{nid}"' in dot
 
 
-def test_dot_without_injection_has_no_failure_annotations():
+def test_dot_without_injection_colours_by_sector():
     dot = render_dot(_graph())
-    assert "failed t=" not in dot
+    assert "failed" not in dot
     assert "injected" not in dot
+    assert "SECTOR" in dot                        # legend is the sector key
+    assert "★" in dot                             # essential entities still marked
 
 
 def test_dot_with_injection_annotates_failures_and_redline():
     dot = render_dot(_graph(), ["grid_substation_12"])
-    assert "injected t=0" in dot                 # the injected substation
-    assert "failed t=60min" in dot               # water fails at 60
-    assert "SPOF → essential" in dot             # NIS2 red-line marker
-    assert "doubleoctagon" in dot                # essential nodes shaped distinctly
+    assert "injected · t=0" in dot                # the injected substation
+    assert "t=60min" in dot                       # water fails at 60
+    assert "SPOF→essential" in dot                # NIS2 red-line marker on the node
+    assert "STATUS" in dot                        # legend switches to the status key
+    assert "★" in dot                             # essential entities marked with a star
 
 
 def test_dot_edges_use_supplies_direction():
