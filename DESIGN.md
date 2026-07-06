@@ -1,0 +1,180 @@
+# cascade-map — DESIGN (Gate 1: LOCKED 2026-07-06)
+
+Status: **Gate 1 locked.** Design reviewed via LLM Council (2026-07-06) and
+revised below. No code until Gate 2. This document is the contract.
+
+> **Naming & scope declaration (read first).** This tool models
+> **dependency-reachability with time buffers** — "function A stops because a
+> function it needs stopped, after A's local buffer drains." It does **not**
+> model **load-redistribution cascades** (where a failed node's load shifts to
+> neighbours that then trip from overload — the 2003 Northeast blackout
+> mechanism). Real grid collapses are often the redistribution kind, and this
+> model structurally cannot represent them. The name "cascade-map" is kept for
+> the *effect* it traces (one failure reaching many services over time), not as
+> a claim about the *mechanism*. Stating this limit precisely is deliberate:
+> the honesty is the point, and naming a model's boundary is the OT/ICS
+> maturity this artifact is meant to demonstrate.
+
+## 1. What it is (and what it is not)
+
+A **dependency-reachability model** for critical infrastructure, with a NIS2
+risk overlay as its spine. You describe a sector topology as a graph of
+"function A depends on function B"; you attach NIS2 vendor-risk scores to the
+nodes; you inject an initial failure (a substation drops, a DNS provider dies, a
+Carrington-class transformer loss); the tool propagates unmet dependencies
+through the graph respecting redundancy and each node's time buffer, and reports
+**what fails, in what order, how fast, which regulated entities it drags below
+tolerated downtime, and where the irreplaceable bottlenecks sit.**
+
+- It is a **modelling / GRC tool** using public or illustrative topology.
+- It is **not** a real-time monitor, not a scanner, not a flow/physics
+  simulator, and it ingests **no classified or live operational data.** That
+  boundary is deliberate so the artifact is unambiguously defensive.
+
+### Why this, why now
+
+The falsifiable core of the "grid is the real target" scenario is a claim you
+can model: *interdependencies between power, telecoms, water, and finance are
+unmanaged, and a small initial failure reaches essential services faster than
+they can be restored.* This tool makes that claim concrete and testable instead
+of rhetorical — the OT/ICS + GRC lane.
+
+### The spine: composition with the NIS2 vendor-risk framework
+
+**This is the tool's headline, not a side feature.** The NIS2 project scores a
+single third party. cascade-map imports those scores **as node attributes** and
+answers the question a board actually asks: *"which of our highest-risk
+suppliers also sit at a single point of failure that pulls an essential entity
+below its tolerated downtime?"* A high-NIS2-risk vendor that is also a
+structural SPOF is the exact thing a regulator and a CISO both lose sleep over —
+and a working NIS2 framework to plug in is the differentiator no other
+job-hunt portfolio has.
+
+## 2. Conceptual model
+
+A **directed graph.** Nodes are infrastructure *functions or assets*; edges are
+*dependencies* ("source needs target to operate").
+
+### Node
+
+Time-buffer and restore fields take **either a point value or a `[low, high]`
+range.** Ranges are what make the invented constants defensible — see Gate 3
+(sensitivity analysis) — while a point value (or the range midpoint) drives the
+deterministic Gate 2 run.
+
+```yaml
+- id: mobile_core_region_x
+  label: "Mobile core network (Region X)"
+  sector: telecom            # power | telecom | water | finance | health | ...
+  criticality: essential     # essential | important | supporting  (NIS2-aligned)
+  autonomy_minutes: [120, 360]     # buffer with all deps gone (battery/genset); point value also allowed
+  nis2_vendor_score: 7.5           # imported from the NIS2 framework; optional
+  required_ride_through_min: 60    # min minutes it must stay up in an incident; failing earlier = breach
+```
+
+### Edge (dependency)
+
+```yaml
+- from: mobile_core_region_x
+  to: grid_substation_12
+  type: power                # power | data | fuel | water | staff | ...
+  redundancy: 1              # independent equivalents (0 = no backup)
+  note: "on-site diesel; edge unmet only when both mains AND fuel gone"
+```
+
+### Propagation semantics (specified before coded)
+
+1. Start with an **initial failed set** F₀ (the injected event).
+2. A required dependency of a given `type` is **unmet** when all edges of that
+   type point to failed nodes and `redundancy` is exhausted.
+3. A node with an unmet required dependency does **not** fail instantly — it
+   fails after its `autonomy_minutes` buffer drains. This yields a
+   **time-ordered** reachability front, not a flat set.
+4. Repeat until no new failures. Output is a **timeline**.
+
+**Restoration modelling is explicitly deferred** (see Gate plan). v1 traces
+failure propagation only; it does not model recovery. This halves the semantics
+for a feature the demo barely exercises.
+
+This is a **threshold + time-buffer reachability** model. Load redistribution is
+out of scope (see scope declaration). Both limits are stated, not hidden.
+
+## 3. Outputs (NIS2 lens first, text-first rendering)
+
+- **NIS2 exposure (headline):** which `essential`/`important` nodes fail, and
+  the ranked list of failed nodes carrying high `nis2_vendor_score` — i.e.
+  high-risk suppliers sitting on the failure path.
+- **Ride-through breaches:** nodes that fail *before* their
+  `required_ride_through_min` — a mandated survival time missed. (Corrected
+  during Gate 3: the earlier `tolerated_downtime_min` framing was an *outage
+  duration* metric, which needs a recovery model we deferred; ride-through is
+  the equivalent that failure-times alone can actually compute.)
+- **Failure timeline:** ordered (time, node, "failed because …").
+- **Single points of failure:** nodes whose individual injection drives the
+  largest downstream failure set.
+- **Time-to-critical:** minutes until the first `essential` node fails.
+
+Rendering is **text-first.** A Graphviz/`dot` render is optional, behind a
+clearly-marked install extra — never a hard dependency, to stay inside the
+fleet's lockfile/CI discipline.
+
+## 4. Worked example (ships as the Gate 2 acceptance test)
+
+```
+grid_substation_12  --(power)-->  mobile_core, water_pump_station, bank_datacentre
+mobile_core         --(data)-->   card_payment_switch
+water_pump_station  --(power)-->  (autonomy 60 min: rooftop tank buffer)
+bank_datacentre     --(power)-->  (autonomy 240 min: UPS + diesel)
+card_payment_switch --(data)-->   (needs mobile_core; autonomy 0)
+```
+
+Inject: `grid_substation_12` fails at t=0. Expected deterministic timeline
+(midpoint inputs), which is the byte-checked acceptance fixture:
+
+- t=0    substation down
+- t=0    card_payment_switch degraded (mobile_core now on battery)
+- t=60m  water_pump_station fails → **essential**, time-to-critical = 60m
+- t=240m mobile_core fails → card payments hard-down
+- t=240m bank_datacentre fails
+
+NIS2 headline the tool should surface: `grid_substation_12` (the grid operator,
+highest `nis2_vendor_score`) is the single point of failure whose loss breaches
+the essential `water_pump_station`'s required ride-through — that is the
+board-slide line.
+
+## 5. Non-goals / scope guards
+
+- **Load-redistribution / overload cascades — out of scope** (reachability only).
+- **Restoration/recovery — deferred to a later gate** (v1 = failure only).
+- No live data, no scanning, no real utility topologies — illustrative only.
+- Single-region scale; not a national digital-twin.
+
+## 6. Gate plan (gate-build doctrine)
+
+- **Gate 1 — this document. LOCKED.** Model, schema, semantics, scope
+  declaration, worked example, and NIS2-as-spine all fixed.
+- **Gate 2 — engine. SHIPPED 2026-07-06.** `cascade_map/engine.py` parses the
+  YAML graph (point values / range midpoints), runs the deterministic
+  failure-timeline propagation, and renders text only. The §4 example is the
+  byte-checked golden fixture; correctness derived by hand from §4, plus golden
+  + redundancy + survivor + CLI + input-schema validation. Python, stdlib +
+  PyYAML.
+- **Gate 3 — analysis + the reframe. SHIPPED 2026-07-06.**
+  `cascade_map/analysis.py` adds time-to-critical, ride-through breaches, SPOF
+  blast-radius scan, the **NIS2 exposure headline** (red-line = high-risk
+  supplier that is also a SPOF hitting an essential entity), and **Monte-Carlo
+  over the `[low, high]` ranges** so invented constants become sensitivity
+  analysis (e.g. water breaches its ride-through in ~75% of sampled scenarios).
+  Text report; hand-derived values + closed-form Monte-Carlo band. Graphviz
+  render deferred (still optional, still behind an extra when built).
+- **Gate 4 — ship. SHIPPED 2026-07-06.** Fleet-standard package layout,
+  two-job CI (test matrix 3.10–3.12 + bandit + ruff; pip-audit + security-gate
+  pinned to the fleet SHA), hashed universal lockfiles at the 3.10 floor, gate
+  green (one HIGH `missing_validation` resolved with real input validation, not
+  a waiver), 25 tests. Published to `LeightonSec/cascade-map`.
+- **Gate 5 (optional, if anyone asks) — restoration modelling.** Reverse
+  propagation, restore-time bottlenecks (the 12-month HV transformer).
+
+**Locked decisions:** Python (matches fleet CI/gate/lockfile patterns; graph
+work is trivial there; Rust buys nothing at hand-authored scale). Text-first
+output; Graphviz optional. NIS2 overlay is the spine. Restoration deferred.

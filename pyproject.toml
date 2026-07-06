@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cascade-map"
+version = "0.1.0"
+description = "Dependency-reachability model for critical-infrastructure interdependencies — LeightonSec portfolio tool"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "LeightonSec" }]
+keywords = ["security", "cybersecurity", "ics", "ot", "nis2", "resilience"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    # Exact pin: the only runtime dependency. A small audit surface is a
+    # feature for a security tool — keep in sync with requirements.txt.
+    "pyyaml==6.0.3",
+]
+
+[project.scripts]
+cascade-map = "cascade_map.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/LeightonSec/cascade-map"
+Issues = "https://github.com/LeightonSec/cascade-map/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cascade_map*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+omit = ["tests/*", "cascade_map/cli.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP"]
+ignore = ["E501"]

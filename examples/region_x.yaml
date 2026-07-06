@@ -1,0 +1,65 @@
+# Worked example from DESIGN.md §4 — a single region's power → telecom →
+# payments → water interdependency. Also the Gate 2 acceptance fixture.
+#
+# Edge direction: `from` depends on `to` ("from needs to, to operate").
+# autonomy_minutes may be a point value or a [low, high] range (midpoint drives
+# the deterministic run; the range feeds the Gate 3 Monte-Carlo sampler).
+# required_ride_through_min: minimum minutes the service MUST stay up during an
+# incident (SLA/regulatory). Failing earlier than this is a breach.
+
+nodes:
+  - id: grid_substation_12
+    label: "HV substation (Region X)"
+    sector: power
+    criticality: essential
+    autonomy_minutes: 0          # the injected failure
+    nis2_vendor_score: 8.5       # grid operator — the deepest supplier dependency
+
+  - id: mobile_core_region_x
+    label: "Mobile core network (Region X)"
+    sector: telecom
+    criticality: important
+    autonomy_minutes: [120, 360] # battery + diesel; midpoint = 240
+    nis2_vendor_score: 7.5
+    required_ride_through_min: 60
+
+  - id: water_pump_station
+    label: "Water pumping station"
+    sector: water
+    criticality: essential
+    autonomy_minutes: [30, 90]   # rooftop tank buffer; midpoint = 60
+    required_ride_through_min: 75
+
+  - id: bank_datacentre
+    label: "Regional bank data centre"
+    sector: finance
+    criticality: important
+    autonomy_minutes: [180, 300] # UPS + diesel; midpoint = 240
+    nis2_vendor_score: 6.0
+
+  - id: card_payment_switch
+    label: "Card payment switch"
+    sector: finance
+    criticality: important
+    autonomy_minutes: 0          # no independent buffer; needs the mobile core
+
+edges:
+  - from: mobile_core_region_x
+    to: grid_substation_12
+    type: power
+    redundancy: 0
+
+  - from: water_pump_station
+    to: grid_substation_12
+    type: power
+    redundancy: 0
+
+  - from: bank_datacentre
+    to: grid_substation_12
+    type: power
+    redundancy: 0
+
+  - from: card_payment_switch
+    to: mobile_core_region_x
+    type: data
+    redundancy: 0

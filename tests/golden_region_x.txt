@@ -1,0 +1,7 @@
+  t=0min     grid_substation_12     injected
+  t=60min    water_pump_station     power dependency unmet (grid_substation_12 failed at t=0min)
+  t=240min   bank_datacentre        power dependency unmet (grid_substation_12 failed at t=0min)
+  t=240min   card_payment_switch    data dependency unmet (mobile_core_region_x failed at t=240min)
+  t=240min   mobile_core_region_x   power dependency unmet (grid_substation_12 failed at t=0min)
+
+5 of 5 nodes failed.  Survivors: none.
