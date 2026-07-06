@@ -165,8 +165,11 @@ board-slide line.
   supplier that is also a SPOF hitting an essential entity), and **Monte-Carlo
   over the `[low, high]` ranges** so invented constants become sensitivity
   analysis (e.g. water breaches its ride-through in ~75% of sampled scenarios).
-  Text report; hand-derived values + closed-form Monte-Carlo band. Graphviz
-  render deferred (still optional, still behind an extra when built).
+  Text report; hand-derived values + closed-form Monte-Carlo band. **Graphviz
+  render SHIPPED 2026-07-06** (`cascade_map/render.py` + `cascade-map dot`):
+  emits DOT with zero Python dependency — failure status, the injected node and
+  the NIS2 red-line highlighted, essential entities shaped distinctly; the
+  system `dot` binary rasterizes it.
 - **Gate 4 — ship. SHIPPED 2026-07-06.** Fleet-standard package layout,
   two-job CI (test matrix 3.10–3.12 + bandit + ruff; pip-audit + security-gate
   pinned to the fleet SHA), hashed universal lockfiles at the 3.10 floor, gate

@@ -60,6 +60,19 @@ cascade-map analyze examples/region_x.yaml --inject grid_substation_12 --runs 50
   P(breach water_pump_station) = 75%
 ```
 
+## Visualize
+
+Emit a Graphviz diagram — nodes coloured by failure status, the injected node
+and any NIS2 red-line SPOF highlighted, essential entities shaped distinctly.
+The tool has **no Graphviz dependency**; it emits DOT, and the system `dot`
+binary (`brew install graphviz`) rasterizes it:
+
+```sh
+cascade-map dot examples/region_x.yaml --inject grid_substation_12 | dot -Tpng -o cascade.png
+```
+
+Without `--inject`, nodes are coloured by sector (the topology view).
+
 ## Graph format
 
 Edge direction is **`from` depends on `to`**. Time buffers accept a point value

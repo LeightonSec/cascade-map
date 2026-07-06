@@ -4,6 +4,7 @@ import sys
 from cascade_map import __version__
 from cascade_map.analysis import render_report
 from cascade_map.engine import load_graph, propagate, render_timeline
+from cascade_map.render import render_dot
 
 
 def _add_graph_args(p: argparse.ArgumentParser) -> None:
@@ -31,6 +32,14 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--seed", type=int, default=0, help="Monte-Carlo RNG seed")
     a.add_argument("--no-monte", action="store_true", help="skip Monte-Carlo")
 
+    d = sub.add_parser("dot", help="emit Graphviz DOT (pipe to `dot -Tpng`)")
+    d.add_argument("graph", help="path to a YAML dependency graph")
+    d.add_argument(
+        "--inject", action="append", metavar="NODE_ID",
+        help="annotate a failure run (optional; repeatable)",
+    )
+    d.add_argument("-o", "--output", metavar="FILE", help="write DOT to FILE")
+
     args = ap.parse_args(argv)
     g = load_graph(args.graph)
 
@@ -39,6 +48,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"graph: {args.graph}   |   injected: {', '.join(args.inject)}")
         print()
         print(render_timeline(propagate(g, args.inject), len(g.nodes)))
+    elif args.cmd == "dot":
+        dot = render_dot(g, args.inject)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                fh.write(dot + "\n")
+        else:
+            print(dot)
     else:
         print(
             render_report(
