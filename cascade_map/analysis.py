@@ -84,16 +84,30 @@ def spof_scan(g: Graph) -> list[tuple[str, int]]:
     return rows
 
 
+# Worst-first: a physical stop outranks lost control outranks reduced capacity.
+_KIND_SEVERITY = {"capacity_degraded": 0, "control_loss": 1, "physical": 2}
+
+
+def _worst_kind(kinds: list[str]) -> str | None:
+    return max(kinds, key=lambda k: _KIND_SEVERITY[k]) if kinds else None
+
+
 def nis2_exposure(g: Graph) -> list[dict]:
     """For every node carrying a NIS2 vendor score, its structural exposure:
-    solo blast radius, whether that blast reaches an essential entity, and the
+    solo blast radius, whether that blast reaches an essential entity, the
     red-line flag (a high-risk supplier that is also a SPOF hitting essential
-    services — the board slide)."""
+    services — the board slide), and the worst failure kind in the blast —
+    a red line whose downstream impact is physical reads very differently
+    from one that is control_loss.
+
+    Uses ``propagate`` directly (not ``_blast``) because it needs the failure
+    *kinds*, which ``_blast`` discards; the blast set is identical."""
     rows = []
     for n in g.nodes:
         if n.nis2_vendor_score is None:
             continue
-        blast = _blast(g, n.id)
+        fs = propagate(g, [n.id])
+        blast = {f.node for f in fs}
         downstream = len(blast) - 1
         hits_essential = any(m != n.id and _crit(g, m) == "essential" for m in blast)
         rows.append(
@@ -103,6 +117,7 @@ def nis2_exposure(g: Graph) -> list[dict]:
                 "downstream": downstream,
                 "hits_essential": hits_essential,
                 "red_line": downstream > 0 and hits_essential,
+                "impact": _worst_kind([f.kind for f in fs if f.node != n.id]),
             }
         )
     rows.sort(key=lambda r: (-r["score"], r["node"]))
@@ -215,9 +230,10 @@ def render_report(
                 if r["red_line"]
                 else ""
             )
+            impact = f"  [worst impact: {r['impact']}]" if r["impact"] else ""
             lines.append(
                 f"  {r['node']:<22} score {r['score']:.1f}  "
-                f"downstream {r['downstream']}{flag}"
+                f"downstream {r['downstream']}{flag}{impact}"
             )
     else:
         lines.append("  no NIS2 scores in graph")

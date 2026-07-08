@@ -79,18 +79,52 @@ deterministic Gate 2 run.
   to: grid_substation_12
   type: power                # power | data | fuel | water | staff | ...
   redundancy: 1              # independent equivalents (0 = no backup)
+  failure_offset: none       # none | partial | full — per-edge failure characterization (Gate 5)
   note: "on-site diesel; edge unmet only when both mains AND fuel gone"
 ```
+
+`redundancy` (integer) and `failure_offset` (enum) are deliberately separate
+concepts: `redundancy` counts independent supplying sources at the node and
+composes dynamically (the node survives until all N are gone), while
+`failure_offset` is a static per-edge category — `full` means this edge is
+completely backed up outside the model and can never propagate failure;
+`partial` means the dependent node degrades (`capacity_degraded`) instead of
+taking the full hit; `none` is an ordinary edge.
+
+### Failure kinds (Gate 5)
+
+Every failure carries a **kind**, *derived from the edge type* — never
+assigned freely per node:
+
+- `data` unmet → `control_loss` — the node keeps running but loses
+  visibility/control (a water plant does not physically halt when it only
+  loses telemetry);
+- everything else (`power`, `physical_route`, `supply`, …) → `physical`.
+
+Unmapped dependency types default to `physical` (conservative worst-case)
+pending explicit classification — a risk tool must not quietly downgrade an
+impact it does not understand. A `partial` failure_offset overrides the base
+mapping to `capacity_degraded`.
+
+**Known limitation — kinds are edge-local, not inherited.** A node's failure
+kind derives solely from its own unmet edge; upstream severity is not
+consulted. Nodes downstream of a merely *degraded* node therefore report full
+severity, so a chain behind a `capacity_degraded` node can read more severe
+than reality. Severity inheritance/capping is deliberately deferred to a
+future gate.
 
 ### Propagation semantics (specified before coded)
 
 1. Start with an **initial failed set** F₀ (the injected event).
 2. A required dependency of a given `type` is **unmet** when all edges of that
-   type point to failed nodes and `redundancy` is exhausted.
+   type point to failed nodes and `redundancy` is exhausted. Edges with
+   `failure_offset: full` never count — they are fully backed up.
 3. A node with an unmet required dependency does **not** fail instantly — it
    fails after its `autonomy_minutes` buffer drains. This yields a
    **time-ordered** reachability front, not a flat set.
-4. Repeat until no new failures. Output is a **timeline**.
+4. Each failure is tagged with the kind derived from its driving edge
+   (see *Failure kinds*); timing is unaffected by kinds.
+5. Repeat until no new failures. Output is a **timeline**.
 
 **Restoration modelling is explicitly deferred** (see Gate plan). v1 traces
 failure propagation only; it does not model recovery. This halves the semantics

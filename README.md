@@ -52,7 +52,7 @@ cascade-map analyze examples/region_x.yaml --inject grid_substation_12 --runs 50
   ...
 
 ## NIS2 exposure
-  grid_substation_12     score 8.5  downstream 4   <== RED LINE (SPOF hitting an essential entity)
+  grid_substation_12     score 8.5  downstream 4   <== RED LINE (SPOF hitting an essential entity)  [worst impact: physical]
   ...
 
 ## Monte-Carlo sensitivity (5000 runs over [low,high] buffers)
@@ -92,6 +92,7 @@ edges:
     to: grid_substation
     type: power                     # power | data | fuel | water | staff | ...
     redundancy: 0                   # independent backups; 0 = single source
+    failure_offset: none            # none | partial | full — per-edge backup category
 ```
 
 ## Model, in one paragraph
@@ -101,6 +102,13 @@ have failed; the node then fails after its own `autonomy_minutes` buffer.
 Different types are independently required (AND); redundant targets within a
 type are the backup (OR). Times are computed by monotone relaxation, so cycles
 converge and anything with an intact dependency simply never fails.
+
+Every failure carries a **kind**, derived from the edge that caused it: a
+`data` dependency unmet means `control_loss` (the node runs blind, it does not
+physically stop); everything else means `physical`; unmapped types default to
+`physical` (conservative worst-case) pending explicit classification. An edge
+with `failure_offset: full` is fully backed up and never propagates;
+`partial` downgrades the hit to `capacity_degraded`.
 
 ## Composes with the NIS2 vendor-risk framework
 

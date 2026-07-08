@@ -4,8 +4,10 @@ Given a dependency graph and an injected initial failure, compute *what fails,
 in what order, and how fast* — a threshold + time-buffer reachability front.
 
 This is NOT a load-redistribution cascade simulator and NOT a recovery model;
-both are out of scope by design (see DESIGN.md). Failure is binary — a node is
-either up or failed; "degraded" states are not modelled.
+both are out of scope by design (see DESIGN.md). A node is either up or failed
+at a given time; each failure additionally carries a *kind* (physical /
+control_loss / capacity_degraded) derived from the edge that caused it, so
+"lost telemetry" is no longer conflated with "physically stopped".
 """
 
 from __future__ import annotations
@@ -39,7 +41,45 @@ class Edge:
     dst: str  # ...this target, to operate
     type: str = "generic"
     redundancy: int = 0  # independent equivalents; 0 = no backup
+    failure_offset: str = "none"  # per-edge failure characterization: none|partial|full
     note: str = ""
+
+
+# Failure kinds — what losing a dependency actually does to the dependent node.
+KIND_PHYSICAL = "physical"  # node stops functioning
+KIND_CONTROL_LOSS = "control_loss"  # node keeps running but loses visibility/control
+KIND_CAPACITY_DEGRADED = "capacity_degraded"  # node keeps running at reduced capacity
+
+FAILURE_KINDS = {KIND_PHYSICAL, KIND_CONTROL_LOSS, KIND_CAPACITY_DEGRADED}
+FAILURE_OFFSETS = {"none", "partial", "full"}
+
+
+def derive_failure_kind(edge_type: str, failure_offset: str = "none") -> str:
+    """The kind of failure an unmet edge inflicts on its dependent node.
+
+    Derived from the edge's dependency type — never assigned freely per node:
+      * ``data`` -> control_loss (telemetry/control lost; the node keeps running)
+      * everything else (power, physical_route, supply, fuel, staff, generic,
+        ...) -> physical. Unmapped dependency types default to physical
+        (conservative worst-case) pending explicit classification — a risk
+        tool must not quietly downgrade an impact it does not understand.
+    A ``partial`` failure_offset overrides the base mapping: the dependency is
+    partially backed up, so the node degrades instead of taking the full hit.
+
+    ``full`` never reaches this function: fully backed-up edges are excluded
+    from the unmet computation in ``propagate`` and can never drive a failure,
+    so being asked to derive a kind for one is a caller bug — fail loudly.
+    """
+    if failure_offset == "full":
+        raise ValueError(
+            "a fully backed-up edge cannot drive a failure; derive_failure_kind "
+            "must not be called with failure_offset='full'"
+        )
+    if failure_offset == "partial":
+        return KIND_CAPACITY_DEGRADED
+    if edge_type == "data":
+        return KIND_CONTROL_LOSS
+    return KIND_PHYSICAL
 
 
 @dataclass
@@ -112,6 +152,16 @@ def _validate_schema(raw) -> None:
         red = e.get("redundancy", 0)
         if isinstance(red, bool) or not isinstance(red, int) or red < 0:
             raise ValueError(f"edge #{i}: redundancy must be a non-negative integer")
+        if "failure_kind" in e:
+            raise ValueError(
+                f"edge #{i}: failure_kind is derived from the edge type and cannot "
+                "be assigned in the graph — remove it"
+            )
+        off = e.get("failure_offset", "none")
+        if off not in FAILURE_OFFSETS:
+            raise ValueError(
+                f"edge #{i}: failure_offset must be one of {sorted(FAILURE_OFFSETS)}"
+            )
 
 
 def load_graph(path: str) -> Graph:
@@ -139,6 +189,7 @@ def load_graph(path: str) -> Graph:
             dst=e["to"],
             type=e.get("type", "generic"),
             redundancy=int(e.get("redundancy", 0)),
+            failure_offset=e.get("failure_offset", "none"),
             note=e.get("note", ""),
         )
         for e in raw.get("edges", [])
@@ -167,6 +218,9 @@ class Failure:
     node: str
     time: float
     reason: str
+    kind: str  # physical | control_loss | capacity_degraded; no default — a
+    # construction site that forgets to derive it must fail loudly, not
+    # silently report worst-case
 
 
 def propagate(
@@ -189,6 +243,10 @@ def propagate(
       * Different types are independently required (AND); redundant targets
         within a type are the OR/backup.
       * N fails at (earliest unmet-time across its required types) + autonomy.
+      * An edge with ``failure_offset: full`` is fully backed up outside the
+        model: its target failing can never make the dependency unmet.
+      * Each failure carries a *kind* derived from the driving edge
+        (``derive_failure_kind``); ``partial`` offsets degrade instead.
     """
     ids = g.node_ids()
     for i in injected:
@@ -197,7 +255,16 @@ def propagate(
 
     deps: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     red: dict[tuple[str, str], int] = {}
+    offset: dict[tuple[str, str, str], str] = {}
+    _protection = {"none": 0, "partial": 1, "full": 2}
     for e in g.edges:
+        key3 = (e.src, e.type, e.dst)
+        # conservative: if duplicate edges disagree, assume the least protection
+        if key3 not in offset or _protection[e.failure_offset] < _protection[offset[key3]]:
+            offset[key3] = e.failure_offset
+    for e in g.edges:
+        if offset[(e.src, e.type, e.dst)] == "full":
+            continue  # fully backed up: this edge can never drive an unmet dependency
         deps[e.src][e.type].append(e.dst)
         key = (e.src, e.type)
         # conservative: if edges disagree, assume the fewest backups
@@ -211,10 +278,12 @@ def propagate(
         autonomy = {n.id: n.autonomy_minutes for n in g.nodes}
     fail = {n.id: INF for n in g.nodes}
     reason: dict[str, str] = {}
+    kind: dict[str, str] = {}
     injected_set = set(injected)
     for i in injected:
         fail[i] = 0.0
         reason[i] = "injected"
+        kind[i] = KIND_PHYSICAL  # injected = the node itself is down, by fiat
 
     for _ in range(len(g.nodes) + 1):  # bounded; converges within |V| passes
         changed = False
@@ -242,6 +311,7 @@ def propagate(
                 reason[n.id] = (
                     f"{typ} dependency unmet ({driver} failed at t={_fmt_t(unmet)})"
                 )
+                kind[n.id] = derive_failure_kind(typ, offset[(n.id, typ, driver)])
                 changed = True
         if not changed:
             break
@@ -249,7 +319,7 @@ def propagate(
         raise RuntimeError("propagation did not converge (unexpected)")
 
     failures = [
-        Failure(node=nid, time=fail[nid], reason=reason[nid])
+        Failure(node=nid, time=fail[nid], reason=reason[nid], kind=kind[nid])
         for nid in fail
         if fail[nid] < INF
     ]
@@ -268,7 +338,7 @@ def render_timeline(failures: list[Failure], total_nodes: int) -> str:
     lines = []
     for f in failures:
         tok = f"t={_fmt_t(f.time)}"
-        lines.append(f"  {tok:<10} {f.node:<22} {f.reason}")
+        lines.append(f"  {tok:<10} {f.node:<22} {f.kind:<18} {f.reason}")
     lines.append("")
     n_failed = len(failures)
     survivors = total_nodes - n_failed
