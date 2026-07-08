@@ -33,6 +33,7 @@ class Node:
     autonomy_range: tuple[float, float] | None = None  # raw range, for Monte-Carlo
     nis2_vendor_score: float | None = None
     required_ride_through_min: float | None = None  # min minutes it must survive
+    purdue_level: float | None = None  # Purdue/ISA-95 level; None = unclassified (Gate 6)
 
 
 @dataclass
@@ -80,6 +81,82 @@ def derive_failure_kind(edge_type: str, failure_offset: str = "none") -> str:
     if edge_type == "data":
         return KIND_CONTROL_LOSS
     return KIND_PHYSICAL
+
+
+# --------------------------------------------------------------------------- #
+# Purdue / IT–OT boundary overlay (Gate 6)
+# --------------------------------------------------------------------------- #
+# A classification overlay only — never touches failure timing. Nodes may carry
+# a Purdue/ISA-95 level; each edge's boundary facts are *derived* from its two
+# endpoints' zones (never assigned in the graph). The IDMZ (level 3.5) is a
+# first-class level, so a DMZ broker/jump-host/historian is a real node, not an
+# artefact inferred from edge geometry.
+#
+# IMPORTANT — purdue_level is a CATEGORICAL label that merely happens to be typed
+# as a number in YAML. Treat it as an enum: compare by exact membership/equality
+# only, NEVER do arithmetic on it. 3.5 is exactly representable in float so
+# `== 3.5` is safe forever, but `level - 3.5 < epsilon`, averaging levels, or
+# "distance to the IDMZ" are the float-equality bugs that pass clean tests here
+# and fail on someone else's messy graph. Any future gate that wants ordinal
+# math must first map the level through an explicit lookup, not compute on it.
+PURDUE_LEVELS = frozenset({0, 1, 2, 3, 3.5, 4, 5})
+_OT_LEVELS = frozenset({0, 1, 2, 3})
+_DMZ_LEVEL = 3.5
+# levels 4, 5 are IT
+
+ZONE_OT = "OT"
+ZONE_DMZ = "DMZ"
+ZONE_IT = "IT"
+ZONE_UNKNOWN = "unknown"
+
+# Tri-state for derived boundary facts: a missing level yields UNKNOWN, which is
+# surfaced explicitly — never silently downgraded to FALSE ("unknown != safe").
+TRI_TRUE = "true"
+TRI_FALSE = "false"
+TRI_UNKNOWN = "unknown"
+
+
+def zone(level: float | None) -> str:
+    """OT (0–3) / DMZ (3.5) / IT (4–5) / unknown (None). Levels are validated to
+    ``PURDUE_LEVELS`` at load time, so the final branch is exactly {4, 5}."""
+    if level is None:
+        return ZONE_UNKNOWN
+    if level in _OT_LEVELS:
+        return ZONE_OT
+    if level == _DMZ_LEVEL:
+        return ZONE_DMZ
+    return ZONE_IT
+
+
+def derive_touches_dmz(zsrc: str, zdst: str) -> str:
+    """An endpoint is a DMZ node: the designed, brokered path (or a lateral hop
+    inside the DMZ). Not called ``crosses_idmz`` — a DMZ↔DMZ edge never leaves
+    the zone, so 'crossing' would be a false positive."""
+    if zsrc == ZONE_DMZ or zdst == ZONE_DMZ:
+        return TRI_TRUE
+    if zsrc == ZONE_UNKNOWN or zdst == ZONE_UNKNOWN:
+        return TRI_UNKNOWN  # an unknown endpoint might itself be a DMZ node
+    return TRI_FALSE
+
+
+def derive_violates_purdue_direct(zsrc: str, zdst: str) -> str:
+    """A raw IT↔OT edge with no DMZ endpoint: IT talking straight to OT with no
+    intermediary — the Stuxnet-shaped hole. A DMZ endpoint means a brokered leg,
+    never a direct bypass."""
+    if zsrc == ZONE_DMZ or zdst == ZONE_DMZ:
+        return TRI_FALSE
+    if {zsrc, zdst} == {ZONE_OT, ZONE_IT}:
+        return TRI_TRUE
+    if zsrc == ZONE_UNKNOWN or zdst == ZONE_UNKNOWN:
+        return TRI_UNKNOWN
+    return TRI_FALSE
+
+
+def derive_crosses_sector(ssrc: str, sdst: str) -> str:
+    """True iff both sectors are known and differ; unknown if either is blank."""
+    if not ssrc or not sdst:
+        return TRI_UNKNOWN
+    return TRI_TRUE if ssrc != sdst else TRI_FALSE
 
 
 @dataclass
@@ -143,6 +220,17 @@ def _validate_schema(raw) -> None:
             val = n.get(fld)
             if val is not None and not isinstance(val, (int, float)):
                 raise ValueError(f"node {n['id']}: {fld} must be a number")
+        lvl = n.get("purdue_level")
+        # Enforce the exact literal domain — this is the load-bearing guarantee
+        # zone() relies on so its fallback branch is exactly {4, 5}. bool is an
+        # int subclass, so reject it before the membership test (True == 1).
+        if lvl is not None and (
+            isinstance(lvl, bool) or lvl not in PURDUE_LEVELS
+        ):
+            raise ValueError(
+                f"node {n['id']}: purdue_level must be one of "
+                f"{sorted(PURDUE_LEVELS)} or omitted, got {lvl!r}"
+            )
     for i, e in enumerate(edges):
         if not isinstance(e, dict):
             raise ValueError(f"edge #{i} must be a mapping")
@@ -157,6 +245,12 @@ def _validate_schema(raw) -> None:
                 f"edge #{i}: failure_kind is derived from the edge type and cannot "
                 "be assigned in the graph — remove it"
             )
+        for derived in ("touches_dmz", "violates_purdue_direct", "crosses_sector"):
+            if derived in e:
+                raise ValueError(
+                    f"edge #{i}: {derived} is derived from the endpoints' Purdue "
+                    "levels/sectors and cannot be assigned in the graph — remove it"
+                )
         off = e.get("failure_offset", "none")
         if off not in FAILURE_OFFSETS:
             raise ValueError(
@@ -181,6 +275,7 @@ def load_graph(path: str) -> Graph:
                 autonomy_range=rng,
                 nis2_vendor_score=n.get("nis2_vendor_score"),
                 required_ride_through_min=n.get("required_ride_through_min"),
+                purdue_level=n.get("purdue_level"),
             )
         )
     edges = [
@@ -221,6 +316,9 @@ class Failure:
     kind: str  # physical | control_loss | capacity_degraded; no default — a
     # construction site that forgets to derive it must fail loudly, not
     # silently report worst-case
+    driver: str | None = None  # the target node whose failure drove this one;
+    # None for injected nodes. Structured so the Gate 6 boundary analysis can
+    # classify the driving edge without parsing the human-readable reason string.
 
 
 def propagate(
@@ -279,6 +377,7 @@ def propagate(
     fail = {n.id: INF for n in g.nodes}
     reason: dict[str, str] = {}
     kind: dict[str, str] = {}
+    drivers: dict[str, str] = {}  # node -> target whose failure drove it (Gate 6)
     injected_set = set(injected)
     for i in injected:
         fail[i] = 0.0
@@ -312,6 +411,7 @@ def propagate(
                     f"{typ} dependency unmet ({driver} failed at t={_fmt_t(unmet)})"
                 )
                 kind[n.id] = derive_failure_kind(typ, offset[(n.id, typ, driver)])
+                drivers[n.id] = driver
                 changed = True
         if not changed:
             break
@@ -319,7 +419,13 @@ def propagate(
         raise RuntimeError("propagation did not converge (unexpected)")
 
     failures = [
-        Failure(node=nid, time=fail[nid], reason=reason[nid], kind=kind[nid])
+        Failure(
+            node=nid,
+            time=fail[nid],
+            reason=reason[nid],
+            kind=kind[nid],
+            driver=drivers.get(nid),  # None for injected nodes
+        )
         for nid in fail
         if fail[nid] < INF
     ]

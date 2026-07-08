@@ -1,0 +1,5 @@
+  t=0min     vendor_cloud_setpoints physical           injected
+  t=30min    plant_scada            control_loss       data dependency unmet (vendor_cloud_setpoints failed at t=0min)
+  t=40min    plc_dosing             control_loss       data dependency unmet (plant_scada failed at t=30min)
+
+3 of 3 nodes failed.  Survivors: none.

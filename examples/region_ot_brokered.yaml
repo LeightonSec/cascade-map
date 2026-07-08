@@ -1,0 +1,66 @@
+# Region OT (brokered) — the SAME cascade as region_ot.yaml, done right.
+#
+# An IDMZ historian / replication broker at Purdue Level 3.5 now sits on the
+# path between the enterprise vendor SaaS (L4) and the plant SCADA (L2). The
+# SCADA no longer reaches across the IT/OT boundary directly; it depends on the
+# DMZ broker, which in turn replicates from the vendor. Same nodes, same timing
+# (the broker has zero autonomy, so it drops the instant the vendor does) — but
+# the boundary classification is completely different:
+#
+#   region_ot.yaml           : one raw L2->L4 edge  -> violates_purdue_direct=true
+#   region_ot_brokered.yaml  : two edges via L3.5   -> touches_dmz=true, ZERO violations
+#
+# This is the golden pair: a well-architected network (broker in place) and a
+# badly-architected one (raw pipe) must NOT produce the same signal.
+#
+# Edge direction: `from` depends on `to`.
+
+nodes:
+  - id: vendor_cloud_setpoints
+    label: "Cloud setpoint-management SaaS (enterprise IT)"
+    sector: digital
+    purdue_level: 4
+    criticality: important
+    autonomy_minutes: 0
+    nis2_vendor_score: 8.8
+
+  - id: dmz_historian
+    label: "IDMZ historian / replication broker (Level 3.5)"
+    sector: digital
+    purdue_level: 3.5
+    criticality: supporting
+    autonomy_minutes: 0         # no local buffer; drops when the vendor drops
+
+  - id: plant_scada
+    label: "Water plant SCADA / supervisory control"
+    sector: water
+    purdue_level: 2
+    criticality: essential
+    autonomy_minutes: [20, 40]  # midpoint = 30
+    required_ride_through_min: 60
+
+  - id: plc_dosing
+    label: "Chemical dosing PLC"
+    sector: water
+    purdue_level: 1
+    criticality: important
+    autonomy_minutes: [5, 15]   # midpoint = 10
+
+edges:
+  - from: plant_scada
+    to: dmz_historian
+    type: data
+    redundancy: 0
+    note: "SCADA pulls setpoints from the IDMZ broker (L2->L3.5, the designed leg)"
+
+  - from: dmz_historian
+    to: vendor_cloud_setpoints
+    type: data
+    redundancy: 0
+    note: "broker replicates from the vendor across the IDMZ (L3.5->L4)"
+
+  - from: plc_dosing
+    to: plant_scada
+    type: data
+    redundancy: 0
+    note: "dosing setpoints from SCADA; loses control when SCADA goes blind"
