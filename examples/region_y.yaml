@@ -1,0 +1,63 @@
+# Region Y — the disagreement case: the vendor scorecard and the dependency
+# graph point at DIFFERENT suppliers.
+#
+# The highest-scored vendor (cloud ERP, 9.2 — breach history, weak audit) has
+# no operational downstream: lose it and nothing else falls. The regional
+# fibre backhaul scores a mid-table 5.5 (small operator, tidy paperwork), but
+# it is the single physical route under the water utility's telemetry AND the
+# mobile core: lose it and water treatment goes blind within the hour, card
+# payments follow when the mobile core's batteries drain.
+#
+# Same schema as region_x.yaml. Edge direction: `from` depends on `to`.
+
+nodes:
+  - id: erp_billing_saas
+    label: "Cloud ERP / billing platform"
+    sector: digital
+    criticality: important
+    autonomy_minutes: 0
+    nis2_vendor_score: 9.2       # highest-risk on paper — zero downstream
+
+  - id: fibre_backhaul_y
+    label: "Regional fibre backhaul (single route)"
+    sector: telecom
+    criticality: important
+    autonomy_minutes: 0          # the injected failure
+    nis2_vendor_score: 5.5       # mid-table on paper — the actual choke point
+
+  - id: mobile_core_region_y
+    label: "Mobile core network (Region Y)"
+    sector: telecom
+    criticality: important
+    autonomy_minutes: [120, 360] # battery + diesel; midpoint = 240
+    nis2_vendor_score: 7.5
+    required_ride_through_min: 60
+
+  - id: water_treatment_plant
+    label: "Water treatment plant (SCADA telemetry)"
+    sector: water
+    criticality: essential
+    autonomy_minutes: [30, 90]   # runs blind on last setpoints; midpoint = 60
+    required_ride_through_min: 75
+
+  - id: card_payment_switch
+    label: "Card payment switch"
+    sector: finance
+    criticality: important
+    autonomy_minutes: 0          # no independent buffer; needs the mobile core
+
+edges:
+  - from: water_treatment_plant
+    to: fibre_backhaul_y
+    type: data
+    redundancy: 0
+
+  - from: mobile_core_region_y
+    to: fibre_backhaul_y
+    type: data
+    redundancy: 0
+
+  - from: card_payment_switch
+    to: mobile_core_region_y
+    type: data
+    redundancy: 0
